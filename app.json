@@ -7,9 +7,11 @@
     "userInterfaceStyle": "dark",
     "assetBundlePatterns": ["**/*"],
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.mertcannrwux.forgemobileagent"
     },
     "android": {
+      "package": "com.mertcannrwux.forgemobileagent",
       "adaptiveIcon": {
         "backgroundColor": "#0b0f17"
       }
