@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   SafeAreaView,
   View,
@@ -10,22 +10,77 @@ import {
 } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { runMobileAgent } from "./src/agent/mobileAgent";
+import { callOpenAiCodingAgent } from "./src/services/openAiClient";
+import {
+  clearApiKey,
+  loadApiKey,
+  loadModel,
+  saveApiKey,
+  saveModel,
+} from "./src/storage/apiKeyStorage";
 
 export default function App() {
   const [input, setInput] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [model, setModel] = useState("gpt-5-mini");
+  const [useApi, setUseApi] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(true);
   const [messages, setMessages] = useState([
     {
       role: "agent",
       text:
-        "Forge Mobile Agent is ready. Describe a coding task and I will turn it into a structured implementation plan.",
+        "Forge Mobile Agent is ready. Add your API key, then describe a coding task.",
     },
   ]);
+
+  useEffect(() => {
+    async function restoreSettings() {
+      const [storedKey, storedModel] = await Promise.all([loadApiKey(), loadModel()]);
+      if (storedKey) {
+        setApiKey(storedKey);
+        setUseApi(true);
+        setSettingsOpen(false);
+      }
+      setModel(storedModel);
+    }
+
+    restoreSettings();
+  }, []);
 
   const taskCount = useMemo(
     () => messages.filter((message) => message.role === "user").length,
     [messages]
   );
+
+  async function handleSaveSettings() {
+    await Promise.all([saveApiKey(apiKey), saveModel(model)]);
+    setUseApi(Boolean(apiKey.trim()));
+    setSettingsOpen(false);
+    setMessages((old) => [
+      ...old,
+      {
+        role: "agent",
+        text: apiKey.trim()
+          ? `API key saved locally. API mode is on using ${model || "gpt-5-mini"}.`
+          : "API key cleared. Local demo mode is on.",
+      },
+    ]);
+  }
+
+  async function handleClearKey() {
+    await clearApiKey();
+    setApiKey("");
+    setUseApi(false);
+    setSettingsOpen(true);
+    setMessages((old) => [
+      ...old,
+      {
+        role: "agent",
+        text: "API key cleared from this device. Local demo mode is on.",
+      },
+    ]);
+  }
 
   async function sendTask() {
     const task = input.trim();
@@ -36,14 +91,23 @@ export default function App() {
     setMessages((old) => [...old, { role: "user", text: task }]);
 
     try {
-      const result = await runMobileAgent(task);
-      setMessages((old) => [
-        ...old,
-        {
-          role: "agent",
-          text: formatAgentResult(result),
-        },
-      ]);
+      if (useApi && apiKey.trim()) {
+        const text = await callOpenAiCodingAgent({
+          apiKey: apiKey.trim(),
+          model: model.trim() || "gpt-5-mini",
+          task,
+        });
+        setMessages((old) => [...old, { role: "agent", text }]);
+      } else {
+        const result = await runMobileAgent(task);
+        setMessages((old) => [
+          ...old,
+          {
+            role: "agent",
+            text: formatAgentResult(result),
+          },
+        ]);
+      }
     } catch (error) {
       setMessages((old) => [
         ...old,
@@ -63,8 +127,60 @@ export default function App() {
       <View style={styles.header}>
         <Text style={styles.title}>Forge Mobile Agent</Text>
         <Text style={styles.subtitle}>
-          Mobile-first coding assistant shell · {taskCount} task{taskCount === 1 ? "" : "s"}
+          {useApi ? `API mode · ${model || "gpt-5-mini"}` : "Local demo mode"} · {taskCount} task
+          {taskCount === 1 ? "" : "s"}
         </Text>
+      </View>
+
+      <View style={styles.settingsCard}>
+        <TouchableOpacity onPress={() => setSettingsOpen((value) => !value)}>
+          <Text style={styles.settingsTitle}>
+            {settingsOpen ? "Hide API settings" : "Show API settings"}
+          </Text>
+        </TouchableOpacity>
+
+        {settingsOpen ? (
+          <View style={styles.settingsBody}>
+            <Text style={styles.label}>OpenAI API key</Text>
+            <TextInput
+              style={styles.settingsInput}
+              value={apiKey}
+              onChangeText={setApiKey}
+              placeholder="sk-..."
+              placeholderTextColor="#8a8f98"
+              autoCapitalize="none"
+              autoCorrect={false}
+              secureTextEntry
+            />
+            <Text style={styles.label}>Model</Text>
+            <TextInput
+              style={styles.settingsInput}
+              value={model}
+              onChangeText={setModel}
+              placeholder="gpt-5-mini"
+              placeholderTextColor="#8a8f98"
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <View style={styles.settingsActions}>
+              <TouchableOpacity style={styles.smallButton} onPress={handleSaveSettings}>
+                <Text style={styles.buttonText}>Save key</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.secondaryButton} onPress={handleClearKey}>
+                <Text style={styles.secondaryButtonText}>Clear</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.secondaryButton}
+                onPress={() => setUseApi((value) => !value)}
+              >
+                <Text style={styles.secondaryButtonText}>{useApi ? "Use local" : "Use API"}</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.warningText}>
+              For production, use a backend proxy instead of shipping API keys in a mobile app.
+            </Text>
+          </View>
+        ) : null}
       </View>
 
       <ScrollView style={styles.chat} contentContainerStyle={styles.chatContent}>
@@ -141,6 +257,67 @@ const styles = StyleSheet.create({
     color: "#94a3b8",
     marginTop: 4,
     fontSize: 14,
+  },
+  settingsCard: {
+    margin: 12,
+    padding: 14,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "#334155",
+    backgroundColor: "#0f172a",
+  },
+  settingsTitle: {
+    color: "#bfdbfe",
+    fontWeight: "800",
+    fontSize: 15,
+  },
+  settingsBody: {
+    marginTop: 12,
+    gap: 8,
+  },
+  label: {
+    color: "#cbd5e1",
+    fontSize: 12,
+    fontWeight: "700",
+    textTransform: "uppercase",
+  },
+  settingsInput: {
+    color: "#f8fafc",
+    backgroundColor: "#020617",
+    borderColor: "#334155",
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  settingsActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 4,
+  },
+  smallButton: {
+    backgroundColor: "#2563eb",
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
+  },
+  secondaryButton: {
+    borderColor: "#475569",
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
+  },
+  secondaryButtonText: {
+    color: "#dbeafe",
+    fontWeight: "800",
+  },
+  warningText: {
+    color: "#fbbf24",
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: 2,
   },
   chat: {
     flex: 1,
